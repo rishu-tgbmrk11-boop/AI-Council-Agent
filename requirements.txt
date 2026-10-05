@@ -1,0 +1,7 @@
+aisuite[groq,google,mistral]
+pydantic>=2.13
+pydantic-core>=2.46
+python-dotenv
+streamlit
+pandas
+requests
