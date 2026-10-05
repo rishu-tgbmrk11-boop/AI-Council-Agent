@@ -13,15 +13,15 @@ from core.message import Message
 from core.board import MessageBoard
 
 # ─── MONKEY PATCH: Fix Groq reasoning_content 400 error ───
-# Groq's strict API rejects the 'reasoning_content' field on assistant
-# messages with HTTP 400. This patch strips it before sending.
 from aisuite.providers.groq_provider import GroqMessageConverter
-from aisuite.providers.openai_provider import OpenAICompliantMessageConverter
 
-class _PatchedGroqMessageConverter(OpenAICompliantMessageConverter):
+# Save the original classmethod (already bound to the class)
+_original_convert_request = GroqMessageConverter.convert_request
+
+class _PatchedGroqMessageConverter:
     @classmethod
     def convert_request(cls, messages):
-        transformed = OpenAICompliantMessageConverter.convert_request(messages)
+        transformed = _original_convert_request(messages)
         for msg in transformed:
             if isinstance(msg, dict) and msg.get("role") == "assistant":
                 msg.pop("reasoning_content", None)
