@@ -10,8 +10,8 @@ load_dotenv()
 
 class Judge:
     def __init__(self,
-                 model: str = "openrouter:nvidia/nemotron-3-super-120b-a12b:free",
-                 fallback_model: str = "groq:qwen/qwen3.8-27b"):
+                 model: str = "groq:qwen/qwen3.8-27b",
+                 fallback_model: str = "groq:openai/gpt-oss-120b"):
         self.model = model
         self.fallback_model = fallback_model
         self.client = ai.Client()
@@ -20,7 +20,7 @@ class Judge:
         response = self.client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=1500,
+            max_tokens=1800,
         )
         content = response.choices[0].message.content or ""
         json_match = re.search(r'\{[\s\S]*\}', content)
@@ -31,28 +31,23 @@ class Judge:
     def evaluate(self, goal: str, board: MessageBoard) -> dict:
         # ─── Build transcript ───
         transcript = "\n\n".join(
-            f"[{m.sender}] ({m.message_type}): {m.content}"
+            f"[{m.sender}]: {m.content}"
             for m in board.get_all()
         )
 
-        # ─── Extract individual agent positions (their last message) ───
-        agent_names = set(m.sender for m in board.get_all() if m.sender != "User")
-        individual_answers = {}
-        for name in agent_names:
-            agent_msgs = [m for m in board.get_all() if m.sender == name]
-            if agent_msgs:
-                individual_answers[name] = agent_msgs[-1].content
-
-        synth_msgs = [m for m in board.get_all() if m.sender == "The Synthesizer"]
-        final_synthesis = synth_msgs[-1].content if synth_msgs else "(none)"
-
-        # ─── Format individual answers for the prompt ───
-        individual_block = "\n\n".join(
-            f"### {name}'s FINAL POSITION:\n{content}"
-            for name, content in individual_answers.items()
+        # ─── Build per-agent contributions ───
+        agent_names = set(
+            m.sender for m in board.get_all()
+            if m.sender not in ("User", "Moderator")
         )
+        agent_block = ""
+        for name in agent_names:
+            msgs = [m for m in board.get_all() if m.sender == name]
+            if msgs:
+                combined = "\n".join(f"- {m.content}" for m in msgs)
+                agent_block += f"### {name}'s CONTRIBUTIONS:\n{combined}\n\n"
 
-        prompt = f"""You are an impartial judge evaluating a multi-model AI debate.
+        prompt = f"""You are an impartial judge evaluating a multi-model AI debate. Your job is NOT to pick a winner. Your job is to score the PROCESS and the INTEGRATION.
 
 GOAL THE COUNCIL WAS GIVEN:
 {goal}
@@ -63,46 +58,60 @@ FULL DEBATE TRANSCRIPT:
 {transcript}
 
 ═══════════════════════════════════════════
-INDIVIDUAL AGENTS' FINAL POSITIONS:
+PER-AGENT CONTRIBUTIONS:
 ═══════════════════════════════════════════
-{individual_block}
-
-═══════════════════════════════════════════
-FINAL SYNTHESIS (from The Synthesizer):
-═══════════════════════════════════════════
-{final_synthesis}
+{agent_block}
 
 ═══════════════════════════════════════════
 YOUR TASK:
 ═══════════════════════════════════════════
-1. Score each agent's individual final position on a 1-10 scale for QUALITY.
-2. Score the FINAL SYNTHESIS on a 1-10 scale.
-3. Compare: Is the synthesis BETTER than the best individual answer? By how much?
-   - If yes, explain what the synthesis added that no single agent produced.
-   - If no, explain what was lost when merging the perspectives.
-4. Score the debate itself on these dimensions (1-10):
-   - REASONING_QUALITY
-   - PERSPECTIVE_DIVERSITY
-   - DEPTH_OF_DEBATE (did they build on each other, or repeat?)
+Score the debate on the following dimensions (each 1-10). Be critical: 10 means flawless and should be rare.
+
+1. REASONING_QUALITY
+   Did the agents reason rigorously? Are arguments logically sound?
+
+2. EVIDENCE_GROUNDING
+   Were factual claims backed by tools (web search, calculations), or simply asserted?
+   Penalize unsupported numbers and unverified claims.
+
+3. PERSPECTIVE_INTEGRATION
+   Did the final synthesis incorporate key points from ALL agents?
+   A synthesis that ignores a whole agent's contribution scores LOW here.
+   A synthesis that meaningfully combines multiple perspectives scores HIGH.
+
+4. DISAGREEMENT_RESOLUTION
+   When agents disagreed, was the conflict addressed, or was it smoothed over?
+   A synthesis that avoids disagreement scores LOW.
+   A synthesis that explicitly resolves the disagreement scores HIGH.
+
+5. HALLUCINATION_ABSENCE
+   Did any agent fabricate facts, numbers, or citations?
+   Fewer fabrications = higher score. Any obvious fabrication caps this at 5.
+
+6. PROCESS_ENGAGEMENT
+   Did agents respond to EACH OTHER by name? Did they build on prior points, or just repeat?
+   Agents talking past each other = LOW. Real back-and-forth = HIGH.
+
+7. CONVERGENCE_QUALITY
+   Did the debate converge on a conclusion for good reasons (evidence, logic), or did it end prematurely?
+   Premature END with no synthesis = LOW.
+
+8. OVERALL_SCORE
+   Single overall quality number (1-10), weighting the debate as a whole — not just the final answer.
+
+VERDICT: 2-3 sentences of honest assessment. What worked, what didn't, what could improve next time.
 
 Return ONLY valid JSON in this exact format, no other text:
 {{
-  "individual_scores": {{
-    "The Logician": <number>,
-    "The Analyst": <number>,
-    "The Synthesizer": <number>
-  }},
-  "synthesis_score": <number>,
-  "best_individual": "<agent name>",
-  "best_individual_score": <number>,
-  "synthesis_delta": <number>,
-  "synthesis_verdict": "<2-3 sentences: did the council add value beyond the best single agent?>",
   "reasoning_quality": <number>,
-  "perspective_diversity": <number>,
-  "depth_of_debate": <number>,
-  "final_answer_quality": <number>,
+  "evidence_grounding": <number>,
+  "perspective_integration": <number>,
+  "disagreement_resolution": <number>,
+  "hallucination_absence": <number>,
+  "process_engagement": <number>,
+  "convergence_quality": <number>,
   "overall_score": <number>,
-  "verdict": "<2-3 sentences of honest overall assessment>"
+  "verdict": "<2-3 sentences>"
 }}
 """
 

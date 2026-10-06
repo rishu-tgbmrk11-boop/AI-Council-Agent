@@ -4,6 +4,7 @@ import sys
 import os
 import time
 import json
+import sqlite3
 from datetime import datetime
 
 # Allow imports from project root
@@ -29,10 +30,8 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Global */
     .block-container { padding-top: 2rem; padding-bottom: 2rem; }
 
-    /* Hero header */
     .hero {
         background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
         border: 1px solid #2d3561;
@@ -55,18 +54,6 @@ st.markdown("""
         margin-top: 6px;
     }
 
-    /* Agent badges */
-    .agent-badge {
-        display: inline-block;
-        padding: 3px 10px;
-        border-radius: 20px;
-        font-size: 11px;
-        font-weight: 600;
-        margin-right: 6px;
-        letter-spacing: 0.3px;
-    }
-
-    /* Sidebar agent card */
     .agent-card {
         padding: 12px 14px;
         border-radius: 10px;
@@ -100,14 +87,12 @@ st.markdown("""
         gap: 4px;
     }
 
-    /* Status dot animations */
     @keyframes pulse {
         0%, 100% { opacity: 1; transform: scale(1); }
         50% { opacity: 0.5; transform: scale(1.3); }
     }
     .status-speaking { animation: pulse 1.2s infinite; }
 
-    /* Step divider */
     .step-header {
         display: flex;
         align-items: center;
@@ -129,7 +114,6 @@ st.markdown("""
         font-size: 13px;
     }
 
-    /* Message card */
     .msg-header {
         display: flex;
         align-items: center;
@@ -145,7 +129,6 @@ st.markdown("""
         font-size: 12px;
     }
 
-    /* Metric cards */
     div[data-testid="stMetric"] {
         background: #16213e;
         border: 1px solid #2d3561;
@@ -154,7 +137,6 @@ st.markdown("""
     }
     div[data-testid="stMetricLabel"] { color: #8892b0 !important; }
 
-    /* Tabs */
     .stTabs [data-baseweb="tab-list"] { gap: 8px; }
     .stTabs [data-baseweb="tab"] {
         background: #16213e;
@@ -165,6 +147,25 @@ st.markdown("""
     .stTabs [aria-selected="true"] {
         background: #2d3561 !important;
         color: #FFD166 !important;
+    }
+
+    .rubric-card {
+        padding: 14px 18px;
+        border-radius: 10px;
+        background: #16213e;
+        border: 1px solid #2d3561;
+        margin-bottom: 12px;
+    }
+    .rubric-card .rubric-title {
+        font-weight: 600;
+        color: #FFD166;
+        font-size: 13px;
+        margin-bottom: 6px;
+    }
+    .rubric-card .rubric-desc {
+        color: #8892b0;
+        font-size: 11px;
+        line-height: 1.5;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -179,7 +180,9 @@ COUNCIL = [
         "persona": (
             "You are a rigorous analytical reasoner. You decompose problems into steps, "
             "spot logical flaws, and use calculations to verify claims. "
-            "When someone quotes a number, verify it with python_repl."
+            "When someone quotes a number, verify it with python_repl. "
+            "Actively identify the WEAKEST claim made by another agent and challenge it. "
+            "Do not agree quickly."
         ),
         "fallback": "groq:qwen/qwen3.8-27b",
         "tools": [python_repl],
@@ -191,41 +194,128 @@ COUNCIL = [
     },
     {
         "name": "The Analyst",
-        "model": "openrouter:nvidia/nemotron-3-super-120b-a12b:free",
+        "model": "groq:qwen/qwen3.8-27b",
         "persona": (
             "You are a creative lateral thinker. You bring current facts, statistics, and "
             "external context. When you need pricing or recent data, call web_search ONCE. "
             "If the first result gives you a partial answer, use what you have — do NOT "
-            "search again. Then immediately write your argument."
+            "search again. If another agent's claim cannot be verified, say so. "
+            "Push back on unverified numbers."
         ),
-        "fallback": "groq:openai/gpt-oss-120b",
+        "fallback": "groq:openai/gpt-oss-20b",
         "tools": [web_search],
         "tool_names": ["web_search"],
         "icon": "🎯",
-        "color": "#76B900",
-        "provider": "OpenRouter",
-        "model_label": "Nemotron 3 Super",
+        "color": "#FF6B35",
+        "provider": "Groq",
+        "model_label": "Qwen 3.8 27B",
     },
     {
         "name": "The Synthesizer",
-        "model": "groq:qwen/qwen3.8-27b",
+        "model": "groq:openai/gpt-oss-20b",
         "persona": (
-            "You are an integrative thinker. You listen to all sides, find common ground, "
-            "and produce the final synthesized answer. You do not make up facts — you "
-            "integrate what the other agents have established."
+            "You are an integrative thinker. Read every agent's contribution carefully. "
+            "Your job is to produce the STRONGEST possible answer — not a compromise. "
+            "If one agent made a clearly superior argument, adopt their position entirely. "
+            "If multiple agents had valid points, combine them WITHOUT diluting specifics. "
+            "Do NOT soften claims to please everyone. Do NOT average positions. "
+            "Quote exact numbers and specifics. Never say 'both perspectives have merit'."
         ),
         "fallback": "groq:openai/gpt-oss-120b",
         "tools": [],
         "tool_names": [],
-        "icon": "🐉",
-        "color": "#FF6B35",
+        "icon": "🦙",
+        "color": "#7B61FF",
         "provider": "Groq",
-        "model_label": "Qwen 3.8 27B",
+        "model_label": "GPT-OSS 20B",
     },
 ]
 
 def agent_config(name: str):
     return next((a for a in COUNCIL if a["name"] == name), None)
+
+
+# ─────────────────────────────────────────────
+# RUBRIC — display metadata for the new Judge dimensions
+# ─────────────────────────────────────────────
+RUBRIC = [
+    ("reasoning_quality",       "🧠 Reasoning Quality",       "Are arguments logically sound and rigorous?"),
+    ("evidence_grounding",      "📚 Evidence Grounding",      "Are factual claims backed by tools, or just asserted?"),
+    ("perspective_integration", "🧬 Perspective Integration", "Did the synthesis cover ALL agents' key points?"),
+    ("disagreement_resolution", "⚖️ Disagreement Resolution", "Were conflicts addressed, or smoothed over?"),
+    ("hallucination_absence",   "🚫 Hallucination Absence",   "Did anyone fabricate facts or numbers?"),
+    ("process_engagement",      "💬 Process Engagement",      "Did agents respond to each other by name?"),
+    ("convergence_quality",     "🎯 Convergence Quality",     "Did the debate end for good reasons?"),
+    ("overall_score",           "🏆 Overall Score",           "Holistic quality of the debate."),
+]
+
+
+def save_debate_to_db(goal, board, scores, steps_completed):
+    """Persist a UI debate to the same DB the eval harness writes to."""
+    try:
+        db_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data", "eval_results.db"
+        )
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+
+        # New schema with 8 rubric dimensions
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_group TEXT NOT NULL,
+                goal_id TEXT NOT NULL,
+                category TEXT, difficulty TEXT, goal TEXT, timestamp TEXT,
+                steps_used INTEGER,
+                overall_score REAL,
+                reasoning_quality REAL,
+                evidence_grounding REAL,
+                perspective_integration REAL,
+                disagreement_resolution REAL,
+                hallucination_absence REAL,
+                process_engagement REAL,
+                convergence_quality REAL,
+                verdict TEXT,
+                judge_raw TEXT,
+                transcript TEXT
+            )
+        """)
+        transcript = "\n\n".join(f"[{m.sender}]: {m.content}" for m in board.get_all())
+        cur.execute("""
+            INSERT INTO runs (
+                run_group, goal_id, category, difficulty, goal, timestamp, steps_used,
+                overall_score, reasoning_quality, evidence_grounding,
+                perspective_integration, disagreement_resolution, hallucination_absence,
+                process_engagement, convergence_quality, verdict, judge_raw, transcript
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            "ui_live",
+            f"ui_{datetime.now().strftime('%H%M%S')}",
+            "ad_hoc", "live",
+            goal,
+            datetime.now().isoformat(),
+            steps_completed,
+            scores.get("overall_score"),
+            scores.get("reasoning_quality"),
+            scores.get("evidence_grounding"),
+            scores.get("perspective_integration"),
+            scores.get("disagreement_resolution"),
+            scores.get("hallucination_absence"),
+            scores.get("process_engagement"),
+            scores.get("convergence_quality"),
+            scores.get("verdict"),
+            json.dumps(scores),
+            transcript,
+        ))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        st.warning(f"Could not save debate to eval DB: {e}")
+        return False
+
 
 # ─────────────────────────────────────────────
 # SESSION STATE
@@ -251,8 +341,8 @@ st.markdown("""
 <div class="hero">
     <h1 class="hero-title">🐝 HIVE</h1>
     <p class="hero-subtitle">
-        A council of three AI architectures — GPT-OSS, Nemotron, and Qwen — 
-        debating under a dynamic moderator with independent evaluation.
+        A council of three AI architectures debating under a dynamic moderator,
+        evaluated on process quality across 8 dimensions.
     </p>
 </div>
 """, unsafe_allow_html=True)
@@ -277,7 +367,7 @@ with st.sidebar:
     with col_b:
         st.caption(f"≤ {max_steps} turns")
 
-    start = st.button("🚀 Start Debate", use_container_width=True, type="primary", disabled=st.session_state.debate_done and False)
+    start = st.button("🚀 Start Debate", use_container_width=True, type="primary")
 
     st.divider()
     st.markdown("### 🎭 The Council")
@@ -286,7 +376,6 @@ with st.sidebar:
         count = sum(1 for m in st.session_state.messages if m.sender == agent["name"])
         speaking = st.session_state.currently_speaking == agent["name"]
 
-        # Status
         if speaking:
             status_html = f'<span class="status-speaking" style="color:{agent["color"]};">● thinking…</span>'
             border_style = f"2px solid {agent['color']}"
@@ -333,7 +422,9 @@ with st.sidebar:
 # ─────────────────────────────────────────────
 # MAIN AREA — TABS
 # ─────────────────────────────────────────────
-tab_debate, tab_judge, tab_raw = st.tabs(["💬 Debate", "⚖️ Judge", "📄 Raw Transcript"])
+tab_debate, tab_judge, tab_evals, tab_raw = st.tabs(
+    ["💬 Debate", "⚖️ Judge", "📊 Evals", "📄 Raw Transcript"]
+)
 
 # ─────────────────────────────────────────────
 # TAB 1: DEBATE
@@ -342,7 +433,6 @@ with tab_debate:
     if not st.session_state.messages and not start:
         st.info("👈 Set a goal in the sidebar and click **Start Debate** to begin.")
 
-    # Render existing history
     if not start and st.session_state.messages:
         for msg in st.session_state.messages:
             if msg.sender == "User":
@@ -368,7 +458,6 @@ with tab_debate:
                     )
                     st.markdown(msg.content)
 
-    # Run the debate
     if start:
         st.session_state.messages = []
         st.session_state.steps_completed = 0
@@ -389,17 +478,14 @@ with tab_debate:
         participants = list(agents.keys())
         moderator = Moderator()
 
-        # Post goal
         goal_msg = Message(sender="User", content=st.session_state.goal, role="user", message_type="goal")
         board.post(goal_msg)
         st.session_state.messages.append(goal_msg)
         with st.chat_message("user"):
             st.markdown(f"**🎯 Goal:** {st.session_state.goal}")
 
-        # Progress bar
         progress_bar = st.progress(0.0, text="Starting debate...")
 
-        # Moderator-driven debate
         step = 0
         while step < max_steps:
             step += 1
@@ -413,7 +499,6 @@ with tab_debate:
             log_entry = f"Step {step}: → {speaker}"
             st.session_state.moderator_log.append(log_entry)
 
-            # Step header
             st.markdown(f"""
             <div class="step-header">
                 <span class="step-number">Step {step}/{max_steps}</span>
@@ -453,19 +538,30 @@ with tab_debate:
         st.session_state.currently_speaking = None
         st.session_state.debate_done = True
 
-        # ── Run Judge after debate
-        with st.spinner("⚖️ Judge is evaluating..."):
+        # ── Judge (8-dimension process rubric)
+        with st.spinner("⚖️ Judge is evaluating the debate process..."):
             judge = Judge(
-                model="openrouter:nvidia/nemotron-3-super-120b-a12b:free",
-                fallback_model="groq:qwen/qwen3.8-27b",
+                model="groq:qwen/qwen3.8-27b",
+                fallback_model="groq:openai/gpt-oss-120b",
             )
             scores = judge.evaluate(st.session_state.goal, board)
             st.session_state.judge_scores = scores
 
+        # ── Save to DB
+        if "error" not in scores:
+            saved = save_debate_to_db(
+                st.session_state.goal,
+                board,
+                scores,
+                st.session_state.steps_completed,
+            )
+            if saved:
+                st.toast("💾 Debate saved to eval database", icon="✅")
+
         st.balloons()
 
 # ─────────────────────────────────────────────
-# TAB 2: JUDGE
+# TAB 2: JUDGE — 8-dimension rubric
 # ─────────────────────────────────────────────
 with tab_judge:
     scores = st.session_state.get("judge_scores")
@@ -474,49 +570,179 @@ with tab_judge:
     elif "error" in scores:
         st.error(f"Judge failed: {scores['error']}")
     else:
-        # ── Synthesis vs Individuals
-        st.markdown("### 🥊 Individual vs. Synthesis")
+        st.markdown("### 📊 Process Evaluation")
+        st.caption("The Judge scores the *debate process* — not which agent won.")
 
-        individual_scores = scores.get("individual_scores", {})
-        synthesis_score = scores.get("synthesis_score", 0)
-        best_individual = scores.get("best_individual", "N/A")
-        best_score = scores.get("best_individual_score", 0)
-        delta = scores.get("synthesis_delta", 0)
+        # ── Rubric grid (4 columns × 2 rows)
+        row1 = RUBRIC[:4]
+        row2 = RUBRIC[4:]
 
-        cols = st.columns(len(individual_scores) + 1)
-        for i, (name, score) in enumerate(individual_scores.items()):
-            cfg = agent_config(name)
-            if cfg:
-                with cols[i]:
-                    st.metric(
-                        f"{cfg['icon']} {name}",
-                        f"{score}/10",
-                        delta="👑 best" if name == best_individual else f"{score - best_score:+.1f}",
-                    )
-        with cols[-1]:
-            st.metric("🏆 Synthesis", f"{synthesis_score}/10", delta=f"{delta:+.1f} vs best")
+        cols = st.columns(4)
+        for i, (key, label, desc) in enumerate(row1):
+            val = scores.get(key, 0)
+            with cols[i]:
+                st.metric(label, f"{val}/10")
 
-        emoji = "🟢" if delta > 0 else ("🟡" if delta == 0 else "🔴")
-        st.info(f"{emoji} **Synthesis verdict:** {scores.get('synthesis_verdict', 'N/A')}")
+        cols = st.columns(4)
+        for i, (key, label, desc) in enumerate(row2):
+            val = scores.get(key, 0)
+            with cols[i]:
+                st.metric(label, f"{val}/10")
 
         st.divider()
 
-        # ── Debate quality
-        st.markdown("### 📊 Debate Quality")
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("🧠 Reasoning", f"{scores.get('reasoning_quality', 0)}/10")
-        c2.metric("🎨 Diversity", f"{scores.get('perspective_diversity', 0)}/10")
-        c3.metric("🔍 Depth", f"{scores.get('depth_of_debate', 0)}/10")
-        c4.metric("🏆 Final Answer", f"{scores.get('final_answer_quality', 0)}/10")
-
+        # ── Overall score
         overall = scores.get("overall_score", 0)
-        st.markdown(f"### Overall: **{overall}/10**")
+        st.markdown(f"### 🏆 Overall: **{overall}/10**")
         st.progress(min(overall / 10, 1.0))
+
+        # ── Verdict
         st.info(f"**Verdict:** {scores.get('verdict', 'N/A')}")
 
+        st.divider()
+
+        # ── Rubric legend
+        with st.expander("📖 What each dimension means"):
+            for key, label, desc in RUBRIC:
+                st.markdown(f"**{label}** — {desc}")
+
 # ─────────────────────────────────────────────
-# TAB 3: RAW TRANSCRIPT
+# TAB 3: EVALS
+# ─────────────────────────────────────────────
+with tab_evals:
+    db_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "data", "eval_results.db"
+    )
+
+    col_r1, col_r2 = st.columns([4, 1])
+    with col_r1:
+        st.caption("Reads from `data/eval_results.db` — updated by the harness and by live debates.")
+    with col_r2:
+        if st.button("🔄 Refresh", use_container_width=True):
+            st.rerun()
+
+    if not os.path.exists(db_path):
+        st.info(
+            "No eval runs yet. Run the harness locally:\n\n"
+            "```bash\npython tests/eval_harness.py\n```\n\n"
+            "Or run a debate in the **Debate** tab — it will be saved here automatically."
+        )
+    else:
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+
+            # Get columns in DB to handle old vs new schema
+            cur.execute("PRAGMA table_info(runs)")
+            existing_cols = {row[1] for row in cur.fetchall()}
+
+            # Latest run
+            cur.execute(
+                "SELECT run_group, MAX(timestamp) as latest FROM runs "
+                "GROUP BY run_group ORDER BY latest DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+
+            if not row:
+                st.info("Eval DB exists but has no runs yet.")
+            else:
+                latest_group = row["run_group"]
+                cur.execute("SELECT * FROM runs WHERE run_group = ?", (latest_group,))
+                rows = cur.fetchall()
+
+                st.markdown(f"### 📊 Eval Run · `{latest_group}`")
+                st.caption(f"{len(rows)} goals scored")
+
+                # ── Aggregate across the 8 rubric dimensions
+                def values_for(col):
+                    if col not in existing_cols:
+                        return []
+                    return [r[col] for r in rows if r[col] is not None]
+
+                def avg(arr):
+                    return sum(arr) / len(arr) if arr else 0
+
+                st.markdown("#### Aggregate Metrics")
+
+                # Show the 8 rubric dimensions if available
+                available_rubric = [(k, l, d) for k, l, d in RUBRIC if k in existing_cols]
+
+                if available_rubric:
+                    # Split into rows of 4
+                    for chunk_start in range(0, len(available_rubric), 4):
+                        chunk = available_rubric[chunk_start:chunk_start + 4]
+                        cols = st.columns(4)
+                        for i, (key, label, desc) in enumerate(chunk):
+                            arr = values_for(key)
+                            with cols[i]:
+                                st.metric(label, f"{avg(arr):.2f}/10")
+                else:
+                    # Fallback for old schema
+                    overall = values_for("overall_score")
+                    reasoning = values_for("reasoning_quality")
+                    c1, c2 = st.columns(2)
+                    c1.metric("Overall", f"{avg(overall):.2f}/10")
+                    c2.metric("Reasoning", f"{avg(reasoning):.2f}/10")
+
+                st.divider()
+
+                # ── Per-goal breakdown
+                st.markdown("#### Per-Goal Breakdown")
+                for r in rows:
+                    overall_val = r["overall_score"] if "overall_score" in existing_cols else 0
+                    overall_val = overall_val or 0
+
+                    with st.expander(
+                        f"`{r['goal_id']}` · overall **{overall_val:.1f}/10** · {r['difficulty']}"
+                    ):
+                        st.markdown(f"**Goal:** {r['goal']}")
+                        st.markdown(
+                            f"**Steps used:** {r['steps_used']} · "
+                            f"**Category:** {r['category']} · "
+                            f"**Timestamp:** {r['timestamp'][:19]}"
+                        )
+                        st.markdown(f"**Verdict:** {r['verdict']}")
+
+                        # Show all available rubric dimensions for this row
+                        if available_rubric:
+                            st.markdown("**Rubric scores:**")
+                            sub_cols = st.columns(4)
+                            for i, (key, label, desc) in enumerate(available_rubric):
+                                val = r[key] if key in existing_cols else None
+                                with sub_cols[i % 4]:
+                                    st.metric(
+                                        label.split(" ", 1)[-1],
+                                        f"{val or 0:.1f}",
+                                    )
+
+                st.divider()
+                st.markdown("#### All Runs")
+                cur.execute(
+                    "SELECT run_group, COUNT(*) as n, "
+                    "AVG(overall_score) as avg_overall, "
+                    "MAX(timestamp) as latest "
+                    "FROM runs GROUP BY run_group ORDER BY latest DESC"
+                )
+                all_runs = cur.fetchall()
+                for run in all_runs:
+                    n = run["n"]
+                    ao = run["avg_overall"] or 0
+                    is_latest = run["run_group"] == latest_group
+                    marker = " ⬅ latest" if is_latest else ""
+                    st.caption(
+                        f"`{run['run_group']}` · {n} goals · "
+                        f"overall **{ao:.2f}**{marker}"
+                    )
+
+            conn.close()
+
+        except Exception as e:
+            st.error(f"Could not read eval DB: {e}")
+
+# ─────────────────────────────────────────────
+# TAB 4: RAW TRANSCRIPT
 # ─────────────────────────────────────────────
 with tab_raw:
     if not st.session_state.messages:
@@ -528,7 +754,6 @@ with tab_raw:
         )
         st.code(raw, language=None)
 
-        # Download button
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         st.download_button(
             "📥 Download as Markdown",

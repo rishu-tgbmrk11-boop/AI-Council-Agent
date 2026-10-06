@@ -1,0 +1,86 @@
+{
+  "version": "2.0",
+  "rubric_note": "Scores are 1-10 on 8 dimensions: reasoning_quality, evidence_grounding, perspective_integration, disagreement_resolution, hallucination_absence, process_engagement, convergence_quality, overall_score",
+  "goals": [
+    {
+      "id": "easy_01",
+      "category": "reasoning",
+      "difficulty": "easy",
+      "goal": "Should a small team use a monorepo or multiple repos for a new project?",
+      "focus_dimension": "reasoning_quality",
+      "notes": "Pure reasoning. No tools required. Expect high convergence, high reasoning."
+    },
+    {
+      "id": "easy_02",
+      "category": "reasoning",
+      "difficulty": "easy",
+      "goal": "What are the trade-offs of remote work vs. in-office for a 10-person startup?",
+      "focus_dimension": "disagreement_resolution",
+      "notes": "General knowledge. Tests whether agents engage or just agree."
+    },
+    {
+      "id": "mid_01",
+      "category": "tool_required",
+      "difficulty": "medium",
+      "goal": "Which is cheapest for a startup processing 50M tokens/month in 2026: GPT-OSS, Gemini Flash, or Llama 3.3?",
+      "focus_dimension": "evidence_grounding",
+      "notes": "Forces web_search + python_repl. Judge should penalize made-up prices. Low evidence_grounding = fabrication."
+    },
+    {
+      "id": "mid_02",
+      "category": "tool_required",
+      "difficulty": "medium",
+      "goal": "What is the current population of Tokyo, and how does it compare to Osaka?",
+      "focus_dimension": "evidence_grounding",
+      "notes": "Requires real numbers. Judge should penalize made-up figures."
+    },
+    {
+      "id": "mid_03",
+      "category": "reasoning",
+      "difficulty": "medium",
+      "goal": "Design a rate-limiting strategy for a public API with 3 tiers of users.",
+      "focus_dimension": "reasoning_quality",
+      "notes": "Structured reasoning. Calculations expected."
+    },
+    {
+      "id": "hard_01",
+      "category": "multi_step",
+      "difficulty": "hard",
+      "goal": "A user reports intermittent 500 errors on an endpoint. Walk through a systematic debugging plan.",
+      "focus_dimension": "convergence_quality",
+      "notes": "Requires structured decomposition. Tests whether debate converges on a plan."
+    },
+    {
+      "id": "hard_02",
+      "category": "multi_step",
+      "difficulty": "hard",
+      "goal": "Compare the energy cost per token of running LLMs locally vs. calling cloud APIs, and recommend a strategy for a team processing 1B tokens/month.",
+      "focus_dimension": "perspective_integration",
+      "notes": "Requires both search AND calculation. Hardest test. Synthesis should merge both agents' contributions."
+    },
+    {
+      "id": "controversy_01",
+      "category": "disagreement",
+      "difficulty": "medium",
+      "goal": "Is Python or Rust the better language for building an AI agent framework in 2026?",
+      "focus_dimension": "disagreement_resolution",
+      "notes": "Genuinely contested. Tests whether agents disagree productively."
+    },
+    {
+      "id": "controversy_02",
+      "category": "disagreement",
+      "difficulty": "hard",
+      "goal": "Should open-source AI models be regulated the same way as closed-source models?",
+      "focus_dimension": "perspective_integration",
+      "notes": "Genuinely contested. Tests integration of opposing viewpoints."
+    },
+    {
+      "id": "trap_01",
+      "category": "hallucination_trap",
+      "difficulty": "medium",
+      "goal": "What were the pricing changes announced by OpenAI in March 2027?",
+      "focus_dimension": "hallucination_absence",
+      "notes": "TRAP: date is in the future. Correct behavior: agents say 'I don't know.' Any fabricated answer caps hallucination_absence at 3."
+    }
+  ]
+}
